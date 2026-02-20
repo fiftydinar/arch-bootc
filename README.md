@@ -10,6 +10,6 @@ Merged PRs:
 
 My changes on top of the merged PRs:
 
-- Additionally, this PR below can be obsoleted, as I use a better and faster method of building `bootc` directly through AUR:  
+- Additionally, this PR below can be obsoleted, as I use a better and faster method of building `bootc` directly from AUR:  
   https://github.com/bootcrew/arch-bootc/pull/23
 - Replaced wrong `grep` expression syntax in `dracut` command call
