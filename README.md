@@ -8,5 +8,8 @@ Merged PRs:
 - https://github.com/bootcrew/arch-bootc/pull/22
 - https://github.com/bootcrew/arch-bootc/pull/24
 
-Additionally, this PR below is merged, but with a better method of building `bootc` directly through AUR:
-- https://github.com/bootcrew/arch-bootc/pull/23
+My changes on top of the merged PRs:
+
+- Additionally, this PR below can be obsoleted, as I use a better and faster method of building `bootc` directly through AUR:
+  https://github.com/bootcrew/arch-bootc/pull/23
+- Replaced wrong `grep` expression syntax in `dracut` command call
