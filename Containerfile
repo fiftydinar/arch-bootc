@@ -1,9 +1,3 @@
-FROM docker.io/archlinux/archlinux:latest AS builder
-RUN pacman -Syu --noconfirm make git rust go-md2man ostree glibc pkgconf
-WORKDIR /build/bootc
-RUN git clone "https://github.com/bootc-dev/bootc.git" . && \
-    make bin install-all DESTDIR=/output
-
 FROM docker.io/archlinux/archlinux:latest
 
 # Move everything from `/var` to `/usr/lib/sysimage` so behavior around pacman remains the same on `bootc usroverlay`'d systems
@@ -16,7 +10,11 @@ RUN sed -i 's/^[[:space:]]*NoExtract/#&/' /etc/pacman.conf
 
 RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo dbus dbus-glib glib2 ostree shadow glibc && pacman -S --clean --noconfirm
 
-COPY --from=builder /output /
+# Install bootc
+RUN wget --directory-prefix=/tmp/arch-tools/ https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/make-aur-package.sh && \
+    chmod +x /tmp/arch-tools/make-aur-package.sh && \
+    (cd /tmp/arch-tools && /tmp/arch-tools/make-aur-package.sh bootc) && \
+    rm -r /tmp/arch-tools
 
 # https://github.com/bootc-dev/bootc/issues/1801
 RUN --mount=type=tmpfs,dst=/tmp --mount=type=tmpfs,dst=/root \
