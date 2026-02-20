@@ -11,7 +11,7 @@ RUN sed -i 's/^[[:space:]]*NoExtract/#&/' /etc/pacman.conf
 RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo dbus dbus-glib glib2 ostree shadow glibc && pacman -S --clean --noconfirm
 
 # Install bootc
-RUN wget --directory-prefix=/tmp/arch-tools/ https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/make-aur-package.sh && \
+RUN curl -fSL --create-dirs -o /tmp/arch-tools/make-aur-package.sh https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/make-aur-package.sh && \
     chmod +x /tmp/arch-tools/make-aur-package.sh && \
     (cd /tmp/arch-tools && /tmp/arch-tools/make-aur-package.sh bootc) && \
     rm -r /tmp/arch-tools
