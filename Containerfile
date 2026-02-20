@@ -13,7 +13,7 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 # Install bootc
 RUN curl -fSL --create-dirs -o /tmp/arch-tools/make-aur-package.sh https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/make-aur-package.sh && \
     chmod +x /tmp/arch-tools/make-aur-package.sh && \
-    (cd /tmp/arch-tools && /tmp/arch-tools/make-aur-package.sh bootc) && \
+    (cd /tmp/arch-tools && /tmp/arch-tools/make-aur-package.sh bootc-git) && \
     rm -r /tmp/arch-tools
 
 # https://github.com/bootc-dev/bootc/issues/1801
