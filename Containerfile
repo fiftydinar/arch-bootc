@@ -16,7 +16,7 @@ RUN pacman-key --init && \
     echo -e '[bootc]\nSigLevel = Required\nServer=https://github.com/hecknt/arch-bootc-pkgs/releases/download/$repo' >> /etc/pacman.conf
 
 # Install base bootc-related packages
-RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman bootc dbus dbus-glib glib2 ostree shadow glibc && pacman -S --clean --noconfirm
+RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman bootc dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
 
 # Necessary for general behavior expected by image-based systems
 RUN printf "systemdsystemconfdir=/etc/systemd/system\nsystemdsystemunitdir=/usr/lib/systemd/system\n" | tee /usr/lib/dracut/dracut.conf.d/30-bootcrew-fix-bootc-module.conf && \
