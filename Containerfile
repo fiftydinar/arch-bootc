@@ -36,7 +36,7 @@ RUN printf "systemdsystemconfdir=/etc/systemd/system\nsystemdsystemunitdir=/usr/
 
 # bootc-image-builder cannot parse Arch's multi-dot VERSION_ID (e.g. 20260716.0.557185)
 # Override to a format it accepts: YYYYMMDD.rolling
-RUN sed -i "s/^VERSION_ID=.*/VERSION_ID=$(date +%Y%m%d).rolling/" /etc/os-release
+RUN sed -i "s/^VERSION_ID=.*/VERSION_ID=$(date +%Y%m%d)/" /etc/os-release
 
 # https://bootc-dev.github.io/bootc/bootc-images.html#standard-metadata-for-bootc-compatible-images
 LABEL containers.bootc 1
