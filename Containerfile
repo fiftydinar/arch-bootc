@@ -21,7 +21,7 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 
 # Build bootc with bcachefs support from source
 COPY patches/bootc /tmp/patches/bootc
-RUN pacman -Syu --noconfirm cargo rust go-md2man git && \
+RUN pacman -Syu --noconfirm make cargo rust go-md2man git && \
     git clone --depth 1 --branch v1.16.3 https://github.com/bootc-dev/bootc.git /tmp/bootc && \
     cd /tmp/bootc && \
     git apply /tmp/patches/bootc/0001-add-bcachefs-filesystem-support.patch && \
@@ -30,7 +30,7 @@ RUN pacman -Syu --noconfirm cargo rust go-md2man git && \
     make bin && \
     make DESTDIR=/ install-all && \
     cd / && rm -rf /tmp/bootc /tmp/bootc-target /tmp/patches && \
-    pacman -R --noconfirm cargo rust go-md2man git && \
+    pacman -R --noconfirm make cargo rust go-md2man git && \
     pacman -Scc --noconfirm
 
 # Necessary for general behavior expected by image-based systems
