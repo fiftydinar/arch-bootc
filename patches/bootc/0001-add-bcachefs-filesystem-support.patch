@@ -1,12 +1,15 @@
 diff --git a/crates/lib/src/install/baseline.rs b/crates/lib/src/install/baseline.rs
-index 0db968b..3dbaa4f 100644
+index 0db968b..b852efb 100644
 --- a/crates/lib/src/install/baseline.rs
 +++ b/crates/lib/src/install/baseline.rs
-@@ -155,6 +155,10 @@ fn mkfs<'a>(
+@@ -155,6 +155,13 @@ fn mkfs<'a>(
              t.cmd.arg("-U");
              t.cmd.arg(u.to_string());
          }
 +        Filesystem::Bcachefs => {
++            if wipe {
++                t.cmd.arg("--force");
++            }
 +            t.cmd.arg("--uuid");
 +            t.cmd.arg(u.to_string());
 +        }
