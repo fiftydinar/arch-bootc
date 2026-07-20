@@ -16,7 +16,22 @@ RUN pacman-key --init && \
     echo -e '[bootc]\nSigLevel = Required\nServer=https://github.com/hecknt/arch-bootc-pkgs/releases/download/$repo' >> /etc/pacman.conf
 
 # Install base bootc-related packages
-RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman bootc bootupd sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
+# bootc is built from source below (not from the repo) for bcachefs support
+RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman bootupd sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
+
+# Build bootc with bcachefs support from source
+COPY patches/bootc /tmp/patches/bootc
+RUN pacman -Syu --noconfirm cargo rust go-md2man git && \
+    git clone --depth 1 --branch v1.16.3 https://github.com/bootc-dev/bootc.git /tmp/bootc && \
+    cd /tmp/bootc && \
+    git apply /tmp/patches/bootc/0001-add-bcachefs-filesystem-support.patch && \
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
+    export CARGO_TARGET_DIR=/tmp/bootc-target && \
+    make bin && \
+    make DESTDIR=/ install-all && \
+    cd / && rm -rf /tmp/bootc /tmp/bootc-target /tmp/patches && \
+    pacman -R --noconfirm cargo rust go-md2man git && \
+    pacman -Scc --noconfirm
 
 # Necessary for general behavior expected by image-based systems
 RUN printf "systemdsystemconfdir=/etc/systemd/system\nsystemdsystemunitdir=/usr/lib/systemd/system\n" | tee /usr/lib/dracut/dracut.conf.d/30-bootcrew-fix-bootc-module.conf && \
