@@ -26,7 +26,6 @@ RUN pacman -Syu --noconfirm make cargo rust go-md2man git && \
     cd /tmp/bootc && \
     git apply /tmp/patches/bootc/0001-add-bcachefs-filesystem-support.patch && \
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
-    export CARGO_TARGET_DIR=/tmp/bootc-target && \
     make bin && \
     make DESTDIR=/ install-all && \
     cd / && rm -rf /tmp/bootc /tmp/bootc-target /tmp/patches && \
