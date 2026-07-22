@@ -48,7 +48,7 @@ RUN pacman -Syu --noconfirm make rust go-md2man git wget && \
     make bin && \
     make DESTDIR=/ install-all && \
     cd / && rm -rf /tmp/bootc /tmp/bootc-target /tmp/patches && \
-    pacman -R --noconfirm make rust go-md2man git wget && \
+    pacman -R --noconfirm make rust go-md2man git && \
     pacman -Scc --noconfirm
 
 # Necessary for general behavior expected by image-based systems
