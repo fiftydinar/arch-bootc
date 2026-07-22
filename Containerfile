@@ -19,20 +19,22 @@ RUN pacman-key --init && \
 # bootc is built from source below (not from the repo) for bcachefs support
 RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman bootupd sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
 
-# Create bootupd update metadata for EFI and BIOS components
+# Create bootupd update metadata for EFI and BIOS components directly
+# (bootupd's generate-update-metadata tries to run rpm for BIOS, which is
+# not available on Arch — manual JSON is cleaner)
 RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /grub ext2 part_gpt normal configfile search chain boot linux && \
-    ls -la /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/ && \
+    TS="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" && \
     mkdir -p /usr/lib/bootupd/updates && \
-    ls -la /usr/lib/bootupd/ && \
-    /usr/libexec/bootupd generate-update-metadata && \
+    printf '{"timestamp":"%s","version":"grub-%s","versions":[{"name":"grub","rpm-evr":"%s"}]}' \
+      "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
+      > /usr/lib/bootupd/updates/EFI.json && \
     printf '{"timestamp":"%s","version":"grub-%s"}' \
-      "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$GRUB_VERSION" \
-      > /usr/lib/bootupd/updates/BIOS.json && \
-    ls -la /usr/lib/bootupd/updates/
+      "$TS" "$GRUB_VERSION" \
+      > /usr/lib/bootupd/updates/BIOS.json
 
 # Build bootc with bcachefs support from source
 COPY patches/bootc /tmp/patches/bootc
