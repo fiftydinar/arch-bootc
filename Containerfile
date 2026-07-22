@@ -27,12 +27,13 @@ RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /grub ext2 part_gpt normal configfile search chain boot linux && \
+    ln -s grubx64.efi "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/shimx64.efi" && \
     TS="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" && \
     mkdir -p /usr/lib/bootupd/updates && \
-    printf '{"timestamp":"%s","version":"grub-%s","versions":[{"name":"grub","rpm_evr":"%s"}]}' \
+    printf '{"timestamp":"%s","version":"grub2-%s","versions":[{"name":"grub2","rpm_evr":"%s"}]}' \
       "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/EFI.json && \
-    printf '{"timestamp":"%s","version":"grub-%s","versions":[{"name":"grub","rpm_evr":"%s"}]}' \
+    printf '{"timestamp":"%s","version":"grub2-%s","versions":[{"name":"grub2","rpm_evr":"%s"}]}' \
       "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/BIOS.json
 
