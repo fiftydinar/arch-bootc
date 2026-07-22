@@ -29,7 +29,7 @@ RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
       -p /grub ext2 part_gpt normal configfile search chain boot linux && \
     TS="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" && \
     mkdir -p /usr/lib/bootupd/updates && \
-    printf '{"timestamp":"%s","version":"grub-%s","versions":[{"name":"grub","rpm-evr":"%s"}]}' \
+    printf '{"timestamp":"%s","version":"grub-%s","versions":[{"name":"grub","rpm_evr":"%s"}]}' \
       "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/EFI.json && \
     printf '{"timestamp":"%s","version":"grub-%s"}' \
