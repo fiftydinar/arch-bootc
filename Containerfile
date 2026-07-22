@@ -20,11 +20,14 @@ RUN pacman-key --init && \
 RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman bootupd sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
 
 # Create bootupd update metadata for EFI and BIOS components
-RUN mkdir -p /usr/lib/efi/grub/1.0/EFI/arch && \
-    grub-mkimage -O x86_64-efi -o /usr/lib/efi/grub/1.0/EFI/arch/grubx64.efi \
+RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
+    mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
+    grub-mkimage -O x86_64-efi \
+      -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /grub ext2 part_gpt normal configfile search chain boot linux && \
     bootupctl generate-update-metadata --sysroot / && \
-    printf '{"timestamp":"%s","version":"grub-2.12"}' "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" \
+    printf '{"timestamp":"%s","version":"grub-%s"}' \
+      "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/BIOS.json
 
 # Build bootc with bcachefs support from source
