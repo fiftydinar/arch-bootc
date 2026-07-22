@@ -25,11 +25,14 @@ RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /grub ext2 part_gpt normal configfile search chain boot linux && \
+    ls -la /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/ && \
     mkdir -p /usr/lib/bootupd/updates && \
+    ls -la /usr/lib/bootupd/ && \
     /usr/libexec/bootupd generate-update-metadata && \
     printf '{"timestamp":"%s","version":"grub-%s"}' \
       "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$GRUB_VERSION" \
-      > /usr/lib/bootupd/updates/BIOS.json
+      > /usr/lib/bootupd/updates/BIOS.json && \
+    ls -la /usr/lib/bootupd/updates/
 
 # Build bootc with bcachefs support from source
 COPY patches/bootc /tmp/patches/bootc
