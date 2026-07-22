@@ -25,7 +25,7 @@ RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /grub ext2 part_gpt normal configfile search chain boot linux && \
-    bootupctl generate-update-metadata --sysroot / && \
+    /usr/libexec/bootupd generate-update-metadata && \
     printf '{"timestamp":"%s","version":"grub-%s"}' \
       "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/BIOS.json
