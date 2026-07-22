@@ -32,8 +32,8 @@ RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     printf '{"timestamp":"%s","version":"grub-%s","versions":[{"name":"grub","rpm_evr":"%s"}]}' \
       "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/EFI.json && \
-    printf '{"timestamp":"%s","version":"grub-%s"}' \
-      "$TS" "$GRUB_VERSION" \
+    printf '{"timestamp":"%s","version":"grub-%s","versions":[{"name":"grub","rpm_evr":"%s"}]}' \
+      "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/BIOS.json
 
 # Build bootc with bcachefs support from source
