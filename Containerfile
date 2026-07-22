@@ -39,15 +39,16 @@ RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
 
 # Build bootc with bcachefs support from source
 COPY patches/bootc /tmp/patches/bootc
-RUN pacman -Syu --noconfirm make rust go-md2man git && \
-    git clone --depth 1 https://github.com/bootc-dev/bootc.git /tmp/bootc && \
+RUN pacman -Syu --noconfirm make rust go-md2man git wget && \
+    BOOTC_TAG=$(wget -qO- https://api.github.com/repos/bootc-dev/bootc/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
+    git clone --depth 1 --branch "$BOOTC_TAG" https://github.com/bootc-dev/bootc.git /tmp/bootc && \
     cd /tmp/bootc && \
     git apply /tmp/patches/bootc/0001-add-bcachefs-filesystem-support.patch && \
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
     make bin && \
     make DESTDIR=/ install-all && \
     cd / && rm -rf /tmp/bootc /tmp/bootc-target /tmp/patches && \
-    pacman -R --noconfirm make rust go-md2man git && \
+    pacman -R --noconfirm make rust go-md2man git wget && \
     pacman -Scc --noconfirm
 
 # Necessary for general behavior expected by image-based systems
