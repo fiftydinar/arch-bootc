@@ -26,7 +26,7 @@ RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
-      -p /grub ext2 part_gpt normal configfile search chain boot linux && \
+      -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux && \
     cp /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/shimx64.efi" && \
     TS="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" && \
     mkdir -p /usr/lib/bootupd/updates && \
