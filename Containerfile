@@ -26,10 +26,12 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 COPY patches/blsuki /tmp/patches/blsuki
 RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
+    # Extract upstream version (strip epoch like "2:" and pkgrel like "-1")
+    GRUB_UPSTREAM="$(echo "$GRUB_VERSION" | sed 's/^[0-9]*://; s/-[0-9].*$//')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
-    # Download and extract GRUB source tarball (pre-configured)
-    wget -qO- https://ftp.gnu.org/gnu/grub/grub-2.14.tar.xz | tar xJ -C /tmp && \
-    cd /tmp/grub-2.14 && \
+    # Download GRUB source matching installed version
+    wget -qO- "https://ftp.gnu.org/gnu/grub/grub-${GRUB_UPSTREAM}.tar.xz" | tar xJ -C /tmp && \
+    cd /tmp/grub-${GRUB_UPSTREAM} && \
     # Patch blsuki.c to use grub_strcmp instead of filevercmp
     patch -p1 < /tmp/patches/blsuki/0001-fix-duplicate-detection.patch && \
     # Configure for x86_64-efi target
@@ -50,7 +52,7 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     if [ -f grub-core/blsuki.mod ] && [ -d /usr/lib/grub/i386-pc ]; then \
       cp grub-core/blsuki.mod /usr/lib/grub/i386-pc/blsuki.mod; \
     fi && \
-    cd / && rm -rf /tmp/grub-2.14 && \
+    cd / && rm -rf /tmp/grub-${GRUB_UPSTREAM} && \
     pacman -R --noconfirm gcc make wget flex bison patch 2>/dev/null; true && \
     pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
