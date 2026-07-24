@@ -23,21 +23,32 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 # (bootupd's generate-update-metadata tries to run rpm for BIOS, which is
 # not available on Arch — manual JSON is cleaner)
 # Also rebuild blsuki.mod with a patch to fix duplicate BLS entries
-RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
+COPY patches/blsuki /tmp/patches/blsuki
+RUN pacman -Syu --noconfirm gcc make wget flex bison python && \
+    GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
-    # Verify filevercmp symbol exists, then redirect to grub_strcmp (for both UEFI and BIOS)
-    nm /usr/lib/grub/x86_64-efi/blsuki.mod | grep -q filevercmp && \
-    objcopy --redefine-sym filevercmp=grub_strcmp \
-      /usr/lib/grub/x86_64-efi/blsuki.mod \
-      /usr/lib/grub/x86_64-efi/blsuki.mod.new && \
-    mv /usr/lib/grub/x86_64-efi/blsuki.mod.new /usr/lib/grub/x86_64-efi/blsuki.mod && \
-    if [ -f /usr/lib/grub/i386-pc/blsuki.mod ]; then \
-      nm /usr/lib/grub/i386-pc/blsuki.mod | grep -q filevercmp && \
-      objcopy --redefine-sym filevercmp=grub_strcmp \
-        /usr/lib/grub/i386-pc/blsuki.mod \
-        /usr/lib/grub/i386-pc/blsuki.mod.new && \
-      mv /usr/lib/grub/i386-pc/blsuki.mod.new /usr/lib/grub/i386-pc/blsuki.mod; \
+    # Download and extract GRUB source tarball (pre-configured)
+    wget -qO- https://ftp.gnu.org/gnu/grub/grub-2.14.tar.xz | tar xJ -C /tmp && \
+    cd /tmp/grub-2.14 && \
+    # Patch blsuki.c to use grub_strcmp instead of filevercmp
+    patch -p1 < /tmp/patches/blsuki/0001-fix-duplicate-detection.patch && \
+    # Configure for x86_64-efi target
+    ./configure --with-platform=efi --target=x86_64 --disable-werror --prefix=/usr 2>&1 | tail -3 && \
+    # Build only the blsuki module
+    make -C grub-core blsuki.mod 2>&1 | tail -5 && \
+    if [ -f grub-core/blsuki.mod ]; then \
+      cp grub-core/blsuki.mod /usr/lib/grub/x86_64-efi/blsuki.mod; \
     fi && \
+    # Also rebuild for i386-pc (BIOS)
+    make clean 2>/dev/null; true && \
+    ./configure --with-platform=pc --target=i386 --disable-werror --prefix=/usr 2>&1 | tail -3 && \
+    make -C grub-core blsuki.mod 2>&1 | tail -5 && \
+    if [ -f grub-core/blsuki.mod ] && [ -d /usr/lib/grub/i386-pc ]; then \
+      cp grub-core/blsuki.mod /usr/lib/grub/i386-pc/blsuki.mod; \
+    fi && \
+    cd / && rm -rf /tmp/grub-2.14 && \
+    pacman -R --noconfirm gcc make wget flex bison python && \
+    pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs blsuki && \
