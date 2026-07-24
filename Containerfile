@@ -23,16 +23,13 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 # (bootupd's generate-update-metadata tries to run rpm for BIOS, which is
 # not available on Arch — manual JSON is cleaner)
 # Also rebuild blsuki.mod with a patch to fix duplicate BLS entries
-RUN pacman -Syu --noconfirm binutils && \
-    GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
+RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
     # Patch blsuki.mod to use grub_strcmp instead of filevercmp for duplicate detection
     objcopy --redefine-sym filevercmp=grub_strcmp \
       /usr/lib/grub/x86_64-efi/blsuki.mod \
       /usr/lib/grub/x86_64-efi/blsuki.mod.new && \
     mv /usr/lib/grub/x86_64-efi/blsuki.mod.new /usr/lib/grub/x86_64-efi/blsuki.mod && \
-    pacman -R --noconfirm binutils && \
-    pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs blsuki && \
