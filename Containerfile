@@ -23,27 +23,15 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 # (bootupd's generate-update-metadata tries to run rpm for BIOS, which is
 # not available on Arch — manual JSON is cleaner)
 # Also rebuild blsuki.mod with a patch to fix duplicate BLS entries
-RUN pacman -Syu --noconfirm git gcc && \
+RUN pacman -Syu --noconfirm binutils && \
     GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
-    git clone --depth 1 https://git.savannah.gnu.org/git/grub.git /tmp/grub-src && \
-    cd /tmp/grub-src && \
-    echo '#define PACKAGE_VERSION "2.14"' > config.h && \
-    echo '#define PACKAGE_STRING "GRUB 2.14"' >> config.h && \
-    echo '#define PACKAGE "grub"' >> config.h && \
-    sed -i 's/rc = filevercmp (entry->filename, e->filename);/rc = grub_strcmp (entry->filename, e->filename);/' grub-core/commands/blsuki.c && \
-    gcc -DGRUB_MODULE -DGRUB_MACHINE_EFI -I include -I . -I grub-core/lib \
-        -fno-stack-protector -fno-strict-aliasing -Os -fPIC \
-        -shared -nostdlib -Wl,--build-id=none \
-        -o /tmp/blsuki.mod \
-        grub-core/commands/blsuki.c \
-        -Wl,--unresolved-symbols=ignore-all && \
-    if [ -f /tmp/blsuki.mod ]; then \
-      mkdir -p "/usr/lib/grub/x86_64-efi" && \
-      cp /tmp/blsuki.mod "/usr/lib/grub/x86_64-efi/blsuki.mod"; \
-    fi && \
-    rm -rf /tmp/grub-src /tmp/blsuki.mod && \
-    pacman -R --noconfirm git gcc && \
+    # Patch blsuki.mod to use grub_strcmp instead of filevercmp for duplicate detection
+    objcopy --redefine-sym filevercmp=grub_strcmp \
+      /usr/lib/grub/x86_64-efi/blsuki.mod \
+      /usr/lib/grub/x86_64-efi/blsuki.mod.new && \
+    mv /usr/lib/grub/x86_64-efi/blsuki.mod.new /usr/lib/grub/x86_64-efi/blsuki.mod && \
+    pacman -R --noconfirm binutils && \
     pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
