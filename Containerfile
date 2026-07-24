@@ -28,15 +28,20 @@ RUN pacman -Syu --noconfirm git gcc && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
     git clone --depth 1 https://git.savannah.gnu.org/git/grub.git /tmp/grub-src && \
     cd /tmp/grub-src && \
+    echo '#define PACKAGE_VERSION "2.14"' > config.h && \
+    echo '#define PACKAGE_STRING "GRUB 2.14"' >> config.h && \
+    echo '#define PACKAGE "grub"' >> config.h && \
     sed -i 's/rc = filevercmp (entry->filename, e->filename);/rc = grub_strcmp (entry->filename, e->filename);/' grub-core/commands/blsuki.c && \
-    gcc -I include -I grub-core/lib -I . \
-        -DGRUB_MODULE -DGRUB_MACHINE_EFI \
-        -fno-stack-protector -fno-strict-aliasing -Os \
+    gcc -DGRUB_MODULE -DGRUB_MACHINE_EFI -I include -I . -I grub-core/lib \
+        -fno-stack-protector -fno-strict-aliasing -Os -fPIC \
         -shared -nostdlib -Wl,--build-id=none \
         -o /tmp/blsuki.mod \
-        grub-core/commands/blsuki.c grub-core/lib/gnulib/filevercmp.c \
+        grub-core/commands/blsuki.c \
         -Wl,--unresolved-symbols=ignore-all && \
-    cp /tmp/blsuki.mod "/usr/lib/grub/x86_64-efi/blsuki.mod" && \
+    if [ -f /tmp/blsuki.mod ]; then \
+      mkdir -p "/usr/lib/grub/x86_64-efi" && \
+      cp /tmp/blsuki.mod "/usr/lib/grub/x86_64-efi/blsuki.mod"; \
+    fi && \
     rm -rf /tmp/grub-src /tmp/blsuki.mod && \
     pacman -R --noconfirm git gcc && \
     pacman -Scc --noconfirm && \
