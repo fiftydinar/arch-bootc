@@ -24,7 +24,7 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 # not available on Arch — manual JSON is cleaner)
 # Also rebuild blsuki.mod with a patch to fix duplicate BLS entries
 COPY patches/blsuki /tmp/patches/blsuki
-RUN pacman -Syu --noconfirm gcc make wget flex bison python && \
+RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
     # Download and extract GRUB source tarball (pre-configured)
@@ -33,7 +33,9 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python && \
     # Patch blsuki.c to use grub_strcmp instead of filevercmp
     patch -p1 < /tmp/patches/blsuki/0001-fix-duplicate-detection.patch && \
     # Configure for x86_64-efi target
-    ./configure --with-platform=efi --target=x86_64 --disable-werror --prefix=/usr 2>&1 | tail -3 && \
+    ./configure --with-platform=efi --target=x86_64 --disable-werror --prefix=/usr \
+      --disable-nls --disable-grub-mkfont --disable-grub-mount --disable-grub-mkrescue \
+      --disable-efiemu 2>&1 | tail -3 && \
     # Build only the blsuki module
     make -C grub-core blsuki.mod 2>&1 | tail -5 && \
     if [ -f grub-core/blsuki.mod ]; then \
@@ -41,13 +43,15 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python && \
     fi && \
     # Also rebuild for i386-pc (BIOS)
     make clean 2>/dev/null; true && \
-    ./configure --with-platform=pc --target=i386 --disable-werror --prefix=/usr 2>&1 | tail -3 && \
+    ./configure --with-platform=pc --target=i386 --disable-werror --prefix=/usr \
+      --disable-nls --disable-grub-mkfont --disable-grub-mount --disable-grub-mkrescue \
+      --disable-efiemu 2>&1 | tail -3 && \
     make -C grub-core blsuki.mod 2>&1 | tail -5 && \
     if [ -f grub-core/blsuki.mod ] && [ -d /usr/lib/grub/i386-pc ]; then \
       cp grub-core/blsuki.mod /usr/lib/grub/i386-pc/blsuki.mod; \
     fi && \
     cd / && rm -rf /tmp/grub-2.14 && \
-    pacman -R --noconfirm gcc make wget flex bison python && \
+    pacman -R --noconfirm gcc make wget flex bison patch 2>/dev/null; true && \
     pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
