@@ -25,7 +25,8 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 # Also rebuild blsuki.mod with a patch to fix duplicate BLS entries
 RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
-    # Patch blsuki.mod to use grub_strcmp instead of filevercmp for duplicate detection
+    # Verify filevercmp symbol exists in blsuki.mod, then redirect to grub_strcmp
+    nm /usr/lib/grub/x86_64-efi/blsuki.mod | grep -q filevercmp && \
     objcopy --redefine-sym filevercmp=grub_strcmp \
       /usr/lib/grub/x86_64-efi/blsuki.mod \
       /usr/lib/grub/x86_64-efi/blsuki.mod.new && \
