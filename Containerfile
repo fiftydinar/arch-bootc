@@ -25,12 +25,19 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 # Also rebuild blsuki.mod with a patch to fix duplicate BLS entries
 RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
-    # Verify filevercmp symbol exists in blsuki.mod, then redirect to grub_strcmp
+    # Verify filevercmp symbol exists, then redirect to grub_strcmp (for both UEFI and BIOS)
     nm /usr/lib/grub/x86_64-efi/blsuki.mod | grep -q filevercmp && \
     objcopy --redefine-sym filevercmp=grub_strcmp \
       /usr/lib/grub/x86_64-efi/blsuki.mod \
       /usr/lib/grub/x86_64-efi/blsuki.mod.new && \
     mv /usr/lib/grub/x86_64-efi/blsuki.mod.new /usr/lib/grub/x86_64-efi/blsuki.mod && \
+    if [ -f /usr/lib/grub/i386-pc/blsuki.mod ]; then \
+      nm /usr/lib/grub/i386-pc/blsuki.mod | grep -q filevercmp && \
+      objcopy --redefine-sym filevercmp=grub_strcmp \
+        /usr/lib/grub/i386-pc/blsuki.mod \
+        /usr/lib/grub/i386-pc/blsuki.mod.new && \
+      mv /usr/lib/grub/i386-pc/blsuki.mod.new /usr/lib/grub/i386-pc/blsuki.mod; \
+    fi && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs blsuki && \
