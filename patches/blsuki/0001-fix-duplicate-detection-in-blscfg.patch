@@ -1,0 +1,20 @@
+From: bootc-deploy
+Subject: [PATCH] Use grub_strcmp instead of filevercmp for duplicate detection
+
+filevercmp sometimes returns non-zero for identical filenames,
+causing duplicate BLS entries to appear in the GRUB menu.
+Use grub_strcmp which reliably returns 0 for identical strings.
+
+diff --git a/grub-core/commands/blsuki.c b/grub-core/commands/blsuki.c
+index 96ae9dc..9f7c8a6 100644
+--- a/grub-core/commands/blsuki.c
++++ b/grub-core/commands/blsuki.c
+@@ -264,7 +264,7 @@ blsuki_add_entry (grub_blsuki_entry_t *entry)
+ 
+   FOR_BLSUKI_ENTRIES (e)
+     {
+-      rc = filevercmp (entry->filename, e->filename);
++      rc = grub_strcmp (entry->filename, e->filename);
+       if (rc == 0)
+ 	return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("duplicate file: `%s'"), entry->filename);
+ 

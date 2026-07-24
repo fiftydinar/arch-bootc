@@ -22,8 +22,24 @@ RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-p
 # Create bootupd update metadata for EFI and BIOS components directly
 # (bootupd's generate-update-metadata tries to run rpm for BIOS, which is
 # not available on Arch — manual JSON is cleaner)
-RUN GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
+# Also rebuild blsuki.mod with a patch to fix duplicate BLS entries
+RUN pacman -Syu --noconfirm git gcc && \
+    GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
+    git clone --depth 1 https://git.savannah.gnu.org/git/grub.git /tmp/grub-src && \
+    cd /tmp/grub-src && \
+    sed -i 's/rc = filevercmp (entry->filename, e->filename);/rc = grub_strcmp (entry->filename, e->filename);/' grub-core/commands/blsuki.c && \
+    gcc -I include -I grub-core/lib -I . \
+        -DGRUB_MODULE -DGRUB_MACHINE_EFI \
+        -fno-stack-protector -fno-strict-aliasing -Os \
+        -shared -nostdlib -Wl,--build-id=none \
+        -o /tmp/blsuki.mod \
+        grub-core/commands/blsuki.c grub-core/lib/gnulib/filevercmp.c \
+        -Wl,--unresolved-symbols=ignore-all && \
+    cp /tmp/blsuki.mod "/usr/lib/grub/x86_64-efi/blsuki.mod" && \
+    rm -rf /tmp/grub-src /tmp/blsuki.mod && \
+    pacman -R --noconfirm git gcc && \
+    pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs blsuki && \
