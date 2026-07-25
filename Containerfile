@@ -38,6 +38,8 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     ./configure --with-platform=efi --target=x86_64 --disable-werror --prefix=/usr \
       --disable-nls --disable-grub-mkfont --disable-grub-mount --disable-grub-mkrescue \
       --disable-efiemu 2>&1 | tail -3 && \
+    # Touch pre-generated lexer/yacc files to prevent regeneration
+    touch -c grub-core/script/*-lexer.c grub-core/script/*-yacc.c 2>/dev/null; true && \
     make -C grub-core blsuki.mod 2>&1 && \
     if [ -f grub-core/blsuki.mod ]; then \
       cp grub-core/blsuki.mod /usr/lib/grub/x86_64-efi/blsuki.mod; \
@@ -47,7 +49,7 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     ./configure --with-platform=pc --target=i386 --disable-werror --prefix=/usr \
       --disable-nls --disable-grub-mkfont --disable-grub-mount --disable-grub-mkrescue \
       --disable-efiemu 2>&1 | tail -3 && \
-    make -C grub-core blsuki.mod 2>&1 && \
+    touch -c grub-core/script/*-lexer.c grub-core/script/*-yacc.c 2>/dev/null; true && \
     if [ -f grub-core/blsuki.mod ] && [ -d /usr/lib/grub/i386-pc ]; then \
       cp grub-core/blsuki.mod /usr/lib/grub/i386-pc/blsuki.mod; \
     fi && \
