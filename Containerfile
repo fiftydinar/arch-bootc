@@ -50,6 +50,7 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
       --disable-nls --disable-grub-mkfont --disable-grub-mount --disable-grub-mkrescue \
       --disable-efiemu 2>&1 | tail -3 && \
     touch -c grub-core/script/*-lexer.c grub-core/script/*-yacc.c 2>/dev/null; true && \
+    make -C grub-core blsuki.mod 2>&1 && \
     if [ -f grub-core/blsuki.mod ] && [ -d /usr/lib/grub/i386-pc ]; then \
       cp grub-core/blsuki.mod /usr/lib/grub/i386-pc/blsuki.mod; \
     fi && \
