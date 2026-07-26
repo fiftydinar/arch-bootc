@@ -59,8 +59,10 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
-      -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs blsuki && \
+      -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs f2fs blsuki && \
     cp /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/shimx64.efi" && \
+    mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/BOOT" && \
+    cp /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/BOOT/BOOTX64.EFI" && \
     TS="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" && \
     mkdir -p /usr/lib/bootupd/updates && \
     printf '{"timestamp":"%s","version":"grub2-%s","versions":[{"name":"grub2","rpm_evr":"%s"}]}' \
@@ -69,6 +71,15 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     printf '{"timestamp":"%s","version":"grub2-%s","versions":[{"name":"grub2","rpm_evr":"%s"}]}' \
       "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/BIOS.json
+
+# Override bootupd's default GRUB configs with our custom versions
+# The EFI stub config uses direct blscfg instead of chaining to the main config,
+# avoiding duplicate entries caused by bootupd's generated main config also calling blscfg.
+COPY patches/bootupd /tmp/patches/bootupd
+RUN rm -f /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
+    cp /tmp/patches/bootupd/grub-static-efi.cfg /usr/lib/bootupd/grub2-static/grub-static-efi.cfg && \
+    cp /tmp/patches/bootupd/10_blscfg.cfg /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
+    rm -rf /tmp/patches/bootupd
 
 # Build bootc with bcachefs support from source
 COPY patches/bootc /tmp/patches/bootc
