@@ -59,7 +59,7 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
       -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
-      -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs f2fs blsuki && \
+      -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs blsuki && \
     cp /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/shimx64.efi" && \
     mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/BOOT" && \
     cp /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/BOOT/BOOTX64.EFI" && \
