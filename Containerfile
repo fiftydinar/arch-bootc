@@ -81,10 +81,16 @@ RUN rm -f /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
     cp /tmp/patches/bootupd/10_blscfg.cfg /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
     rm -rf /tmp/patches/bootupd
 
-# Build bootc with bcachefs support from source
+# Build bootc with bcachefs support from source.
+# Pin bootc to v1.16.10: v1.16.11 made the `selinux` crate an unconditional
+# dependency, which pulls in libselinux at build time (selinux-sys needs its
+# headers + libclang) and links libselinux.so.1 into the binary at runtime.
+# That conflicts with this image, which is deliberately SELinux-free, and Arch
+# does not package libselinux. Revisit once upstream makes selinux optional
+# (https://github.com/bootc-dev/bootc/issues/2431) and cut a release with it.
 COPY patches/bootc /tmp/patches/bootc
 RUN pacman -Syu --noconfirm make rust go-md2man git wget && \
-    BOOTC_TAG=$(wget -qO- https://api.github.com/repos/bootc-dev/bootc/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
+    BOOTC_TAG=v1.16.10 && \
     git clone --depth 1 --branch "$BOOTC_TAG" https://github.com/bootc-dev/bootc.git /tmp/bootc && \
     cd /tmp/bootc && \
     git apply /tmp/patches/bootc/0001-add-bcachefs-filesystem-support.patch && \
