@@ -147,7 +147,14 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
     cp /tmp/patches/bootupd/grub-static-efi.cfg /usr/lib/bootupd/grub2-static/grub-static-efi.cfg && \
     cp /tmp/patches/bootupd/10_blscfg.cfg /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
     cd / && rm -rf /tmp/bootupd /tmp/patches/bootupd && \
-    (pacman -R --noconfirm rust make git pkgconf 2>/dev/null || true) && \
+    # pkgconf is deliberately NOT in this list: dracut depends on it at runtime,
+    # so 'pacman -R ... pkgconf' aborted the whole transaction ("removing pkgconf
+    # breaks dependency 'pkgconf' required by dracut") and left the toolchain in
+    # this layer - rust alone is ~440MiB. Because the install and the removal
+    # happen in the same RUN, a failed removal means rust/make/git ship inside
+    # this layer permanently; a later layer removing them only adds whiteouts.
+    pacman -R --noconfirm rust make git && \
+    for _p in rust make git; do if pacman -Q "$_p" >/dev/null 2>&1; then echo "ERROR: $_p still installed after cleanup, layer is bloated"; exit 1; fi; done && \
     pacman -Scc --noconfirm
 
 # Build bootc with bcachefs support from source.
