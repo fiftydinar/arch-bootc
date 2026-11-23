@@ -25,16 +25,23 @@ RUN pacman-key --init && \
 # grub-install/efibootmgr when updating the bootloader on installed systems.
 RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman grub efibootmgr sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
 
-# Create bootupd update metadata for EFI and BIOS components directly
-# (bootupd's generate-update-metadata tries to run rpm for BIOS, which is
-# not available on Arch — manual JSON is cleaner)
-# Also rebuild blsuki.mod with a patch to fix duplicate BLS entries
+# Build the GRUB EFI payload for bootupd's update tree, and rebuild blsuki.mod
+# with a patch to fix duplicate BLS entries.
+#
+# The payload goes into /usr/lib/efi/<component>/<version>/EFI, which is the
+# layout bootupd reads for its EFI update metadata. The component directory must
+# be named "grub2", not "grub": bootupd derives the metadata name from that
+# directory (get_efi_component_from_usr) and only recognises "grub2" as the
+# GRUB bootloader (Bootloader::try_from_efi_component_name), so any other name
+# would make the component invisible and leave ::Grub out of
+# available_bootloaders(). The EFI/ subdirectory below it is copied as-is, so
+# Arch's EFI/arch layout is preserved.
 COPY patches/blsuki /tmp/patches/blsuki
 RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     GRUB_VERSION="$(pacman -Qi grub | sed -n 's/^Version *: //p')" && \
     # Extract upstream version (strip epoch like "2:" and pkgrel like "-1")
     GRUB_UPSTREAM="$(echo "$GRUB_VERSION" | sed 's/^[0-9]*://; s/-[0-9].*$//')" && \
-    mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch" && \
+    mkdir -p "/usr/lib/efi/grub2/${GRUB_VERSION}/EFI/arch" && \
     # Download GRUB source matching installed version
     wget -qO- "https://ftp.gnu.org/gnu/grub/grub-${GRUB_UPSTREAM}.tar.xz" | tar xJ -C /tmp && \
     cd /tmp/grub-${GRUB_UPSTREAM} && \
@@ -64,19 +71,11 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
     pacman -R --noconfirm gcc make wget flex bison patch 2>/dev/null; true && \
     pacman -Scc --noconfirm && \
     grub-mkimage -O x86_64-efi \
-      -o "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
+      -o "/usr/lib/efi/grub2/${GRUB_VERSION}/EFI/arch/grubx64.efi" \
       -p /EFI/arch ext2 part_gpt normal configfile search chain boot linux fat btrfs xfs blsuki && \
-    cp /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/shimx64.efi" && \
-    mkdir -p "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/BOOT" && \
-    cp /usr/lib/efi/grub/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub/${GRUB_VERSION}/EFI/BOOT/BOOTX64.EFI" && \
-    TS="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" && \
-    mkdir -p /usr/lib/bootupd/updates && \
-    printf '{"timestamp":"%s","version":"grub2-%s","versions":[{"name":"grub2","rpm_evr":"%s"}]}' \
-      "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
-      > /usr/lib/bootupd/updates/EFI.json && \
-    printf '{"timestamp":"%s","version":"grub2-%s","versions":[{"name":"grub2","rpm_evr":"%s"}]}' \
-      "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
-      > /usr/lib/bootupd/updates/BIOS.json
+    cp /usr/lib/efi/grub2/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub2/${GRUB_VERSION}/EFI/arch/shimx64.efi" && \
+    mkdir -p "/usr/lib/efi/grub2/${GRUB_VERSION}/EFI/BOOT" && \
+    cp /usr/lib/efi/grub2/${GRUB_VERSION}/EFI/arch/grubx64.efi "/usr/lib/efi/grub2/${GRUB_VERSION}/EFI/BOOT/BOOTX64.EFI"
 
 # Build bootupd from source. It is not in Arch's repos and was removed from
 # the bootc repo, but the ostree backend needs it to update GRUB on installed
@@ -119,6 +118,24 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
     # The patch must be visible in the built binary, not just in the source tree.
     grep -aq 'usr/bin/grub-install' /usr/libexec/bootupd || { echo "ERROR: bootupd still looks for Fedora's grub2-install"; exit 1; } && \
     if grep -aq 'usr/sbin/grub2-install' /usr/libexec/bootupd; then echo "ERROR: Fedora grub2-install path still compiled in"; exit 1; fi && \
+    # Generate EFI.json/BIOS.json with bootupd itself rather than hand-writing
+    # them. They used to be written by hand because 0.2.34 hardcoded rpm: BIOS
+    # metadata came from `rpm -q --queryformat ... -f`, which does not exist on
+    # Arch. 0.4.0 resolves the owning package through the pluggable
+    # packagesystem/query-file-owner script instead, installed as the pacman
+    # variant above, so the native generator works now.
+    # EFI metadata never needed rpm: generate_meta_from_usr_efi derives it from
+    # the /usr/lib/efi/<name>/<version>/EFI directory names. It still has to run
+    # here rather than earlier, because bootupctl does not exist until now.
+    bootupctl generate-update-metadata && \
+    # bootupctl skips a component it cannot handle instead of failing, so a
+    # missing metadata file is the signal that generation silently did nothing.
+    test -s /usr/lib/bootupd/updates/BIOS.json || { echo "ERROR: BIOS.json not generated"; exit 1; } && \
+    test -s /usr/lib/bootupd/updates/EFI.json || { echo "ERROR: EFI.json not generated"; exit 1; } && \
+    grep -Eq '"name": ?"grub2"' /usr/lib/bootupd/updates/EFI.json || { echo "ERROR: EFI.json does not name grub2 (won't be seen as GRUB)"; cat /usr/lib/bootupd/updates/EFI.json; exit 1; } && \
+    grep -Eq '"name": ?"grub"' /usr/lib/bootupd/updates/BIOS.json || { echo "ERROR: BIOS.json does not name the grub package"; cat /usr/lib/bootupd/updates/BIOS.json; exit 1; } && \
+    echo "--- bootupd updates/BIOS.json ---" && cat /usr/lib/bootupd/updates/BIOS.json && echo && \
+    echo "--- bootupd updates/EFI.json ---" && cat /usr/lib/bootupd/updates/EFI.json && echo && \
     # Override bootupd's default GRUB configs with our custom versions
     # The EFI stub config uses direct blscfg instead of chaining to the main config,
     # avoiding duplicate entries caused by bootupd's generated main config also calling blscfg.
