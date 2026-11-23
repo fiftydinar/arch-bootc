@@ -95,6 +95,14 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
     git clone --depth 1 --branch "$BOOTUPD_TAG" https://github.com/coreos/bootupd.git /tmp/bootupd && \
     cd /tmp/bootupd && \
     git apply /tmp/patches/bootupd/0001-Modify-grub-paths-to-match-Arch-Linux.patch && \
+    # Arch moved to OpenSSL 4.x, which the openssl-sys version in bootupd's
+    # lockfile (0.9.112) refuses to build against:
+    #   This crate is only compatible with OpenSSL (version 1.1.0, 1.1.1, or
+    #   3.x), or LibreSSL 3.5.0 through 4.2.x, but a different version of
+    #   OpenSSL was found.
+    # openssl-sys 0.9.114+ accepts 4.x, so move the lockfile forward to the
+    # matching openssl/openssl-sys pair. Only these two crates move.
+    cargo update -p openssl --precise 0.10.82 && \
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
     make && \
     make DESTDIR=/ install install-grub-static install-systemd-unit && \
