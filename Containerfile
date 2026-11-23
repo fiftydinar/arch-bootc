@@ -80,32 +80,45 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
 
 # Build bootupd from source. It is not in Arch's repos and was removed from
 # the bootc repo, but the ostree backend needs it to update GRUB on installed
-# systems. Upstream assumes Fedora's layout (grub2-install, /boot/grub2,
-# grub2-mkimage); Arch ships grub-install and keeps its config in /boot/grub,
-# so patches/bootupd/0001-* retargets those paths before building.
+# systems. Upstream assumes Fedora's layout (grub2-install, /usr/bin/grub2-editenv,
+# /boot/grub2); Arch ships grub-install, grub-editenv and keeps its config in
+# /boot/grub, so patches/bootupd/0001-* retargets those paths before building.
+#
+# Note what 0.4.0's "distribution agnostic" work did and did not cover: the
+# *package manager* is now pluggable (packagesystem/query-file-owner-{rpm,dpkg,
+# pacman,apk}, selected by PACKAGESYSTEM), but the GRUB paths above are still
+# hardcoded to Fedora's, so our patch is still required. PACKAGESYSTEM=pacman is
+# mandatory: the default is rpm, and installing the rpm query script on Arch
+# would leave bootupd shelling out to a binary that does not exist.
 #
 # The install targets mirror the removed package's package() function:
-#   install              -> /usr/libexec/bootupd + /usr/bin/bootupctl
+#   install              -> /usr/libexec/bootupd, /usr/bin/bootupctl and
+#                           /usr/lib/bootupd/packagesystem/query-file-owner
+#                           (via the query-file-$(PACKAGESYSTEM) prerequisite)
 #   install-grub-static  -> /usr/lib/bootupd/grub2-static (needed below)
-#   install-systemd-unit -> bootloader-update.service
+#   install-systemd-unit -> bootloader-update.service, plus the
+#                           bootupd-varlink.{service,socket} API units (new in
+#                           0.3.0; both are ConditionPathExists=/sys/firmware/efi
+#                           and stay disabled unless something enables them, so
+#                           they do not change how the image boots)
 # The toolchain is removed again in the same layer, so it does not ship.
 COPY patches/bootupd /tmp/patches/bootupd
 RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
-    BOOTUPD_TAG=v0.2.34 && \
+    BOOTUPD_TAG=v0.4.0 && \
     git clone --depth 1 --branch "$BOOTUPD_TAG" https://github.com/coreos/bootupd.git /tmp/bootupd && \
     cd /tmp/bootupd && \
     git apply /tmp/patches/bootupd/0001-Modify-grub-paths-to-match-Arch-Linux.patch && \
-    # Arch moved to OpenSSL 4.x, which the openssl-sys version in bootupd's
-    # lockfile (0.9.112) refuses to build against:
-    #   This crate is only compatible with OpenSSL (version 1.1.0, 1.1.1, or
-    #   3.x), or LibreSSL 3.5.0 through 4.2.x, but a different version of
-    #   OpenSSL was found.
-    # openssl-sys 0.9.114+ accepts 4.x, so move the lockfile forward to the
-    # matching openssl/openssl-sys pair. Only these two crates move.
-    cargo update -p openssl --precise 0.10.82 && \
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
     make && \
-    make DESTDIR=/ install install-grub-static install-systemd-unit && \
+    make DESTDIR=/ install install-grub-static install-systemd-unit PACKAGESYSTEM=pacman && \
+    # Fail loudly if the Arch path patch ever stops taking effect: a bootupd
+    # looking for Fedora's layout silently never updates the bootloader.
+    test -L /usr/bin/bootupctl || { echo "ERROR: /usr/bin/bootupctl missing"; exit 1; } && \
+    test -f /usr/lib/bootupd/packagesystem/query-file-owner || { echo "ERROR: query-file-owner missing"; exit 1; } && \
+    grep -q pacman /usr/lib/bootupd/packagesystem/query-file-owner || { echo "ERROR: query-file-owner is not the pacman variant"; exit 1; } && \
+    # The patch must be visible in the built binary, not just in the source tree.
+    grep -aq 'usr/bin/grub-install' /usr/libexec/bootupd || { echo "ERROR: bootupd still looks for Fedora's grub2-install"; exit 1; } && \
+    if grep -aq 'usr/sbin/grub2-install' /usr/libexec/bootupd; then echo "ERROR: Fedora grub2-install path still compiled in"; exit 1; fi && \
     # Override bootupd's default GRUB configs with our custom versions
     # The EFI stub config uses direct blscfg instead of chaining to the main config,
     # avoiding duplicate entries caused by bootupd's generated main config also calling blscfg.
