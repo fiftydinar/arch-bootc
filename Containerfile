@@ -17,7 +17,13 @@ RUN pacman-key --init && \
 
 # Install base bootc-related packages
 # bootc is built from source below (not from the repo) for bcachefs support
-RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman bootupd sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
+# bootupd is built from source below too: it was dropped from the bootc repo
+# (hecknt/arch-bootc-pkgs@da9729e) after its maintainer deemed the patches
+# unreliable, and Arch itself does not package it. That package used to pull in
+# grub and efibootmgr implicitly, so both are listed explicitly here: the GRUB
+# blsuki rebuild below reads the installed grub version, and bootupd drives
+# grub-install/efibootmgr when updating the bootloader on installed systems.
+RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman grub efibootmgr sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
 
 # Create bootupd update metadata for EFI and BIOS components directly
 # (bootupd's generate-update-metadata tries to run rpm for BIOS, which is
@@ -72,14 +78,43 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
       "$TS" "$GRUB_VERSION" "$GRUB_VERSION" \
       > /usr/lib/bootupd/updates/BIOS.json
 
-# Override bootupd's default GRUB configs with our custom versions
-# The EFI stub config uses direct blscfg instead of chaining to the main config,
-# avoiding duplicate entries caused by bootupd's generated main config also calling blscfg.
+# Build bootupd from source. It is not in Arch's repos and was removed from
+# the bootc repo, but the ostree backend needs it to update GRUB on installed
+# systems. Upstream assumes Fedora's layout (grub2-install, /boot/grub2,
+# grub2-mkimage); Arch ships grub-install and keeps its config in /boot/grub,
+# so patches/bootupd/0001-* retargets those paths before building.
+#
+# The install targets mirror the removed package's package() function:
+#   install              -> /usr/libexec/bootupd + /usr/bin/bootupctl
+#   install-grub-static  -> /usr/lib/bootupd/grub2-static (needed below)
+#   install-systemd-unit -> bootloader-update.service
+# The toolchain is removed again in the same layer, so it does not ship.
 COPY patches/bootupd /tmp/patches/bootupd
-RUN rm -f /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
+RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
+    BOOTUPD_TAG=v0.2.34 && \
+    git clone --depth 1 --branch "$BOOTUPD_TAG" https://github.com/coreos/bootupd.git /tmp/bootupd && \
+    cd /tmp/bootupd && \
+    git apply /tmp/patches/bootupd/0001-Modify-grub-paths-to-match-Arch-Linux.patch && \
+    # Arch moved to OpenSSL 4.x, which the openssl-sys version in bootupd's
+    # lockfile (0.9.112) refuses to build against:
+    #   This crate is only compatible with OpenSSL (version 1.1.0, 1.1.1, or
+    #   3.x), or LibreSSL 3.5.0 through 4.2.x, but a different version of
+    #   OpenSSL was found.
+    # openssl-sys 0.9.114+ accepts 4.x, so move the lockfile forward to the
+    # matching openssl/openssl-sys pair. Only these two crates move.
+    cargo update -p openssl --precise 0.10.82 && \
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
+    make && \
+    make DESTDIR=/ install install-grub-static install-systemd-unit && \
+    # Override bootupd's default GRUB configs with our custom versions
+    # The EFI stub config uses direct blscfg instead of chaining to the main config,
+    # avoiding duplicate entries caused by bootupd's generated main config also calling blscfg.
+    rm -f /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
     cp /tmp/patches/bootupd/grub-static-efi.cfg /usr/lib/bootupd/grub2-static/grub-static-efi.cfg && \
     cp /tmp/patches/bootupd/10_blscfg.cfg /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
-    rm -rf /tmp/patches/bootupd
+    cd / && rm -rf /tmp/bootupd /tmp/patches/bootupd && \
+    (pacman -R --noconfirm rust make git pkgconf 2>/dev/null || true) && \
+    pacman -Scc --noconfirm
 
 # Build bootc with bcachefs support from source.
 # Pin bootc to v1.16.10: v1.16.11 made the `selinux` crate an unconditional
