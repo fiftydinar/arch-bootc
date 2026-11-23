@@ -117,21 +117,55 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
     pacman -Scc --noconfirm
 
 # Build bootc with bcachefs support from source.
-# Pin bootc to v1.16.10: v1.16.11 made the `selinux` crate an unconditional
-# dependency, which pulls in libselinux at build time (selinux-sys needs its
-# headers + libclang) and links libselinux.so.1 into the binary at runtime.
-# That conflicts with this image, which is deliberately SELinux-free, and Arch
-# does not package libselinux. Revisit once upstream makes selinux optional
-# (https://github.com/bootc-dev/bootc/issues/2431) and cut a release with it.
+#
+# Built with SELinux support disabled. Arch packages neither libselinux nor
+# libsepol, and this image is deliberately SELinux-free, so the default build
+# cannot link. Upstream issue #2431 made this a supported build mode in v1.17.0:
+# `selinux` became an optional cargo feature, still on by default, so it has to
+# be dropped with --no-default-features and the wanted defaults added back.
+#
+# --no-default-features applies to the whole workspace, not just bootc's own
+# crate, so every default we still need is listed explicitly:
+#   install-to-disk  bootc-lib: disk installation support
+#   pre-6.15         bootc-initramfs-setup: composefs loopback fallback for
+#                    kernels older than 6.15
+# This is the exact incantation upstream documents in
+# docs/src/bootc-packaging-and-integration.7.md. Such a build treats SELinux as
+# disabled on the host: it never reads selinuxfs, never enters the install_t
+# domain and never parses SELinux contexts. Verified with
+#   cargo tree --no-default-features --features "install-to-disk pre-6.15"
+# which drops selinux and selinux-sys from the graph and changes nothing else.
+#
+# install-all must not rebuild the binary with default features, so it gets the
+# same CARGO_OPTIONS and SKIP_BUILD=1: `install` depends on `completion`, which
+# depends on `bin`, and a bare `make install-all` would otherwise recompile with
+# SELinux and fail.
+#
+# Expected result: `bootc container lint` (last step) warns
+#   Lint warning: runtime-deps: Missing required runtime dependencies: chcon
+# That is a false positive, and there is nothing to install: the lint reads a
+# static list from [workspace.metadata.binary-dependencies] without consulting
+# the enabled cargo features, so it asks for chcon on SELinux-free builds too.
+# chcon cannot run here: it is only invoked by test_install_t(), which is
+# reached solely through selinux_ensure_install(); the two call sites are gated
+# on lsm::selinux_enabled() (compiled to `false` without the feature) and on
+# srcdata.selinux (whether the source image has etc/selinux/config, which this
+# image does not). The lint itself is new in 1.17.x; v1.16.10 had no
+# runtime-deps check at all, which is why this warning did not appear before.
 COPY patches/bootc /tmp/patches/bootc
 RUN pacman -Syu --noconfirm make rust go-md2man git wget && \
-    BOOTC_TAG=v1.16.10 && \
+    BOOTC_TAG=v1.17.5 && \
+    BOOTC_CARGO_OPTIONS='--no-default-features --features "install-to-disk pre-6.15"' && \
     git clone --depth 1 --branch "$BOOTC_TAG" https://github.com/bootc-dev/bootc.git /tmp/bootc && \
     cd /tmp/bootc && \
     git apply /tmp/patches/bootc/0001-add-bcachefs-filesystem-support.patch && \
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
-    make bin && \
-    make DESTDIR=/ install-all && \
+    make bin CARGO_OPTIONS="$BOOTC_CARGO_OPTIONS" && \
+    make DESTDIR=/ install-all CARGO_OPTIONS="$BOOTC_CARGO_OPTIONS" SKIP_BUILD=1 && \
+    # Fail loudly if this ever regresses: a rebuild that silently picked up the
+    # default features again would link libselinux, which does not exist here.
+    if ldd /usr/bin/bootc | grep -q libselinux; then echo "ERROR: bootc links libselinux, the SELinux-free build flags were lost"; exit 1; fi && \
+    bootc --version | grep -qx "bootc ${BOOTC_TAG#v}" || { echo "ERROR: bootc version is not ${BOOTC_TAG#v}"; bootc --version; exit 1; } && \
     cd / && rm -rf /tmp/bootc /tmp/bootc-target /tmp/patches && \
     pacman -R --noconfirm make rust go-md2man git && \
     pacman -Scc --noconfirm
