@@ -19,8 +19,11 @@ RUN pacman-key --init && \
 # bootc is built from source below (not from the repo) for bcachefs support
 # bootupd is built from source below too: it was dropped from the bootc repo
 # (hecknt/arch-bootc-pkgs@da9729e) after its maintainer deemed the patches
-# unreliable, and Arch itself does not package it.
-RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
+# unreliable, and Arch itself does not package it. That package used to pull in
+# grub and efibootmgr implicitly, so both are listed explicitly here: the GRUB
+# blsuki rebuild below reads the installed grub version, and bootupd drives
+# grub-install/efibootmgr when updating the bootloader on installed systems.
+RUN pacman -Syu --noconfirm base cpio dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo podman grub efibootmgr sudo dbus dbus-glib glib2 ostree shadow glibc && pacman -Scc --noconfirm
 
 # Create bootupd update metadata for EFI and BIOS components directly
 # (bootupd's generate-update-metadata tries to run rpm for BIOS, which is
