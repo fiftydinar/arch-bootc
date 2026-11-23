@@ -140,6 +140,18 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
 # same CARGO_OPTIONS and SKIP_BUILD=1: `install` depends on `completion`, which
 # depends on `bin`, and a bare `make install-all` would otherwise recompile with
 # SELinux and fail.
+#
+# Expected result: `bootc container lint` (last step) warns
+#   Lint warning: runtime-deps: Missing required runtime dependencies: chcon
+# That is a false positive, and there is nothing to install: the lint reads a
+# static list from [workspace.metadata.binary-dependencies] without consulting
+# the enabled cargo features, so it asks for chcon on SELinux-free builds too.
+# chcon cannot run here: it is only invoked by test_install_t(), which is
+# reached solely through selinux_ensure_install(); the two call sites are gated
+# on lsm::selinux_enabled() (compiled to `false` without the feature) and on
+# srcdata.selinux (whether the source image has etc/selinux/config, which this
+# image does not). The lint itself is new in 1.17.x; v1.16.10 had no
+# runtime-deps check at all, which is why this warning did not appear before.
 COPY patches/bootc /tmp/patches/bootc
 RUN pacman -Syu --noconfirm make rust go-md2man git wget && \
     BOOTC_TAG=v1.17.5 && \
