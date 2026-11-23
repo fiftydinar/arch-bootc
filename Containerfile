@@ -127,7 +127,11 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
     # EFI metadata never needed rpm: generate_meta_from_usr_efi derives it from
     # the /usr/lib/efi/<name>/<version>/EFI directory names. It still has to run
     # here rather than earlier, because bootupctl does not exist until now.
-    bootupctl generate-update-metadata && \
+    # The verb lives under the hidden `backend` group (bootupctl dispatches on
+    # argv[0]; `generate-update-metadata` is otherwise only a bootupd verb).
+    # This is the same invocation upstream's own test harness uses, see
+    # tests/tests/generate-update-metadata.sh.
+    bootupctl backend generate-update-metadata -vvv && \
     # bootupctl skips a component it cannot handle instead of failing, so a
     # missing metadata file is the signal that generation silently did nothing.
     test -s /usr/lib/bootupd/updates/BIOS.json || { echo "ERROR: BIOS.json not generated"; exit 1; } && \
