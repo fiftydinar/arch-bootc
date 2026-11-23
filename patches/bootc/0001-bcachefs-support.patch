@@ -1,0 +1,591 @@
+Backport of https://github.com/bootc-dev/bootc/pull/2661 ("Support bcachefs
+in filesystem installs and updates"), applied on top of v1.17.5.
+
+The PR cherry-picks onto v1.17.5 with no conflicts. It supersedes our earlier
+hand-written 0001-add-bcachefs-filesystem-support.patch: it covers the same
+Filesystem::Bcachefs plumbing (mkfs.bcachefs via the -U arm, enum, TryFrom,
+man page), and additionally:
+
+  - rejects a bcachefs root without a separate /boot *before* --wipe, so a
+    request GRUB cannot boot no longer destroys the target disk first
+  - resolves multi-device roots (bcachefs reports a colon-separated source,
+    /dev/vda:/dev/vdb, which the old single-device path choked on)
+  - recovers fs UUID/label from blkid when udev is unavailable
+
+Note bcachefs does not implement fs-verity, so composefs installs onto it
+still need --allow-missing-verity; that is unchanged by this PR and tracked
+in https://github.com/bootc-dev/bootc/issues/2341
+
+Delete this file entirely once the PR is merged and a release containing it
+is what we build against.
+
+diff --git a/crates/blockdev/src/blockdev.rs b/crates/blockdev/src/blockdev.rs
+index 6b6c292..e9234ff 100644
+--- a/crates/blockdev/src/blockdev.rs
++++ b/crates/blockdev/src/blockdev.rs
+@@ -373,17 +373,12 @@ impl Device {
+         if self.partn.is_none() {
+             self.partn = self.read_sysfs_property("partition")?;
+         }
+-        // When udev is unavailable, lsblk can't populate parttype/pttype from
+-        // the udev database. Fall back to blkid -p which probes the disk
+-        // directly. See https://github.com/osbuild/osbuild/pull/2428
+-        if !have_udev() && (self.parttype.is_none() || self.pttype.is_none()) {
+-            let props = blkid_probe(&self.path())?;
+-            if self.parttype.is_none() {
+-                self.parttype = props.get("PART_ENTRY_TYPE").cloned();
+-            }
+-            if self.pttype.is_none() {
+-                self.pttype = props.get("PTTYPE").cloned();
+-            }
++        // When udev is unavailable, lsblk can't populate the partition and
++        // filesystem properties from the udev database. Fall back to blkid -p
++        // which probes the disk directly.
++        // See https://github.com/osbuild/osbuild/pull/2428
++        if !have_udev() {
++            self.backfill_from_blkid(&blkid_probe(&self.path())?);
+         }
+         // Recurse to child devices
+         for child in self.children.iter_mut().flatten() {
+@@ -392,6 +387,21 @@ impl Device {
+         Ok(())
+     }
+ 
++    /// Fill the properties lsblk left empty from `blkid -p` output.
++    fn backfill_from_blkid(&mut self, props: &HashMap<String, String>) {
++        for (field, key) in [
++            (&mut self.parttype, "PART_ENTRY_TYPE"),
++            (&mut self.pttype, "PTTYPE"),
++            (&mut self.fstype, "TYPE"),
++            (&mut self.uuid, "UUID"),
++            (&mut self.label, "LABEL"),
++        ] {
++            if field.is_none() {
++                *field = props.get(key).cloned();
++            }
++        }
++    }
++
+     /// Query parent devices via `lsblk --inverse`.
+     ///
+     /// Returns `Ok(None)` if this device is already a root device (no parents).
+@@ -490,8 +500,9 @@ pub fn list_dev(dev: &Utf8Path) -> Result<Device> {
+         .ok_or_else(|| anyhow!("no device output from lsblk for {dev}"))
+ }
+ 
+-#[context("Finding block device for ZFS dataset {dataset}")]
+-fn list_dev_for_zfs_dataset(dataset: &str) -> Result<Device> {
++/// List the block devices of the ZFS pool holding a dataset.
++#[context("Finding block devices for ZFS dataset {dataset}")]
++fn list_devs_for_zfs_dataset(dataset: &str) -> Result<Vec<Device>> {
+     let dataset = dataset.strip_prefix("ZFS=").unwrap_or(dataset);
+     let pool = dataset
+         .split('/')
+@@ -503,26 +514,84 @@ fn list_dev_for_zfs_dataset(dataset: &str) -> Result<Device> {
+         .run_get_string()
+         .with_context(|| format!("Querying ZFS pool {pool}"))?;
+ 
++    let mut devs = Vec::new();
+     for line in output.lines() {
+         if line.starts_with('\t') || line.starts_with(' ') {
+             let dev_path = line.trim_start().split('\t').next().unwrap_or("").trim();
+             if dev_path.starts_with('/') {
+-                return list_dev(Utf8Path::new(dev_path));
++                // A leaf vdev can be a regular file, or a device that has
++                // gone away; skip it as long as another one resolves.
++                match list_dev(Utf8Path::new(dev_path)) {
++                    Ok(dev) => devs.push(dev),
++                    Err(e) => tracing::debug!("Skipping {dev_path}: {e:#}"),
++                }
++            }
++        }
++    }
++    anyhow::ensure!(
++        !devs.is_empty(),
++        "Could not find a block device backing ZFS pool {pool}"
++    );
++    Ok(devs)
++}
++
++/// List the block devices backing a filesystem, given its type and mount
++/// source as findmnt reports them.
++pub fn list_devs_by_source(fstype: &str, source: &str) -> Result<Vec<Device>> {
++    if fstype == "zfs" || source.starts_with("ZFS=") {
++        return list_devs_for_zfs_dataset(source);
++    }
++    // A multi-device bcachefs names its devices colon separated
++    // (`/dev/nvme0n1p1:/dev/sda`); any other source is a single device.
++    let paths = if fstype == "bcachefs" {
++        source.split(':').collect()
++    } else {
++        vec![source]
++    };
++    paths
++        .into_iter()
++        .map(|path| list_dev(Utf8Path::new(path)))
++        .collect()
++}
++
++/// List the whole disks backing the filesystem mounted at the given
++/// directory, each disk once.
++pub fn list_roots_by_dir(dir: &Dir) -> Result<Vec<Device>> {
++    let fsinfo = bootc_mount::inspect_filesystem_of_dir(dir)?;
++    let mut seen = HashSet::new();
++    let mut roots = Vec::new();
++    for dev in list_devs_by_source(&fsinfo.fstype, &fsinfo.source)? {
++        for root in dev.find_all_roots()? {
++            if seen.insert(root.name.clone()) {
++                roots.push(root);
+             }
+         }
+     }
++    Ok(roots)
++}
+ 
+-    anyhow::bail!("Could not find a block device backing ZFS pool {pool}")
++/// Out of the devices backing one filesystem, select the one to install a
++/// bootloader for: the first whose disk carries an ESP, else the first.
++pub fn select_bootloader_dev(devs: &[Device]) -> Result<Device> {
++    // A single device is the answer without looking for an ESP.
++    if devs.len() > 1 {
++        for dev in devs {
++            if dev.find_colocated_esps()?.is_some() {
++                return Ok(dev.clone());
++            }
++        }
++    }
++    devs.first()
++        .cloned()
++        .ok_or_else(|| anyhow!("No block device backs the filesystem"))
+ }
+ 
+ /// List the device containing the filesystem mounted at the given directory.
++/// When several devices back it, this is the one [`select_bootloader_dev`]
++/// selects.
+ pub fn list_dev_by_dir(dir: &Dir) -> Result<Device> {
+     let fsinfo = bootc_mount::inspect_filesystem_of_dir(dir)?;
+-    let source = &fsinfo.source;
+-    if fsinfo.fstype == "zfs" || source.starts_with("ZFS=") {
+-        return list_dev_for_zfs_dataset(source);
+-    }
+-    list_dev(&Utf8PathBuf::from(source))
++    select_bootloader_dev(&list_devs_by_source(&fsinfo.fstype, &fsinfo.source)?)
+ }
+ 
+ /// The statfs magic of ZFS (`ZFS_SUPER_MAGIC` in OpenZFS), which libc lacks.
+@@ -578,8 +647,16 @@ pub fn is_dir_backing_device_ro(dir: &Dir) -> Result<Option<bool>> {
+         tracing::debug!("Filesystem source {source} is not a block device node");
+         return Ok(None);
+     }
+-    let dev = list_dev(&Utf8PathBuf::from(source))?;
+-    Ok(dev.ro)
++    let devs = list_devs_by_source(&fsinfo.fstype, source)?;
++    // Read-only if any device is, read-write if every device is known to
++    // be, else unknown.
++    Ok(if devs.iter().any(|d| d.ro == Some(true)) {
++        Some(true)
++    } else if devs.iter().all(|d| d.ro == Some(false)) {
++        Some(false)
++    } else {
++        None
++    })
+ }
+ 
+ pub struct LoopbackDevice {
+@@ -895,7 +972,7 @@ mod test {
+     fn test_parse_lsblk_no_udev() {
+         let fixture = include_str!("../tests/fixtures/lsblk-no-udev.json");
+         let devs: DevicesOutput = serde_json::from_str(fixture).unwrap();
+-        let dev = devs.blockdevices.into_iter().next().unwrap();
++        let mut dev = devs.blockdevices.into_iter().next().unwrap();
+         // Without udev, parttype and pttype are null
+         assert!(dev.pttype.is_none());
+         let children = dev.children.as_deref().unwrap();
+@@ -903,9 +980,18 @@ mod test {
+         assert!(children[0].parttype.is_none());
+         assert!(children[1].parttype.is_none());
+         assert!(children[2].parttype.is_none());
++        assert!(children[1].uuid.is_none());
+         // ESP and BIOS boot discovery should fail (no parttype to match)
+         assert!(dev.find_partition_of_esp_optional().unwrap().is_none());
+         assert!(dev.find_partition_of_bios_boot().is_none());
++        // ESP discovery works once blkid output fills the fields in
++        let props = HashMap::from([
++            ("PART_ENTRY_TYPE".to_string(), ESP.to_string()),
++            ("UUID".to_string(), "D206-1D97".to_string()),
++        ]);
++        dev.children.as_mut().unwrap()[1].backfill_from_blkid(&props);
++        let esp = dev.find_partition_of_esp_optional().unwrap().unwrap();
++        assert_eq!(esp.uuid.as_deref(), Some("D206-1D97"));
+     }
+ 
+     #[test]
+diff --git a/crates/lib/src/bootloader.rs b/crates/lib/src/bootloader.rs
+index a081c52..9f6ecf5 100644
+--- a/crates/lib/src/bootloader.rs
++++ b/crates/lib/src/bootloader.rs
+@@ -66,7 +66,7 @@ pub(crate) fn mount_esp_part(root: &Dir, root_path: &Utf8Path, is_ostree: bool)
+         root
+     };
+ 
+-    let roots = bootc_blockdev::list_dev_by_dir(physical_root)?.find_all_roots()?;
++    let roots = bootc_blockdev::list_roots_by_dir(physical_root)?;
+     for dev in &roots {
+         if let Some(esp_dev) = dev.find_partition_of_esp_optional()? {
+             let esp_path = esp_dev.path();
+diff --git a/crates/lib/src/install.rs b/crates/lib/src/install.rs
+index c972c0f..ab81451 100644
+--- a/crates/lib/src/install.rs
++++ b/crates/lib/src/install.rs
+@@ -2858,7 +2858,7 @@ pub(crate) async fn install_to_filesystem(
+     };
+ 
+     // Gather data about the root filesystem
+-    let inspect = bootc_mount::inspect_filesystem(&fsopts.root_path)?;
++    let mut inspect = bootc_mount::inspect_filesystem(&fsopts.root_path)?;
+ 
+     // Gather global state, destructuring the provided options.
+     // IMPORTANT: We might re-execute the current process in this function (for SELinux among other things)
+@@ -2893,6 +2893,20 @@ pub(crate) async fn install_to_filesystem(
+         None => require_empty_rootdir(&rootfs_fd)?,
+     }
+ 
++    // Find the real underlying backing device for the root.  This is currently just required
++    // for GRUB (BIOS) and in the future zipl (I think).
++    let device_info = {
++        let devs = bootc_blockdev::list_devs_by_source(&inspect.fstype, &inspect.source)?;
++        // findmnt has no UUID for a multi-device bcachefs source
++        // (`/dev/vda:/dev/vdb`), but each of its devices carries it.
++        if inspect.uuid.is_none() && inspect.fstype == "bcachefs" {
++            inspect.uuid = devs.iter().find_map(|dev| dev.uuid.clone());
++        }
++        let dev = bootc_blockdev::select_bootloader_dev(&devs)?;
++        tracing::debug!("Target filesystem backing device: {}", dev.path());
++        dev
++    };
++
+     // We support overriding the mount specification for root (i.e. LABEL vs UUID versus
+     // raw paths).
+     // We also support an empty specification as a signal to omit any mountspec kargs.
+@@ -2959,14 +2973,6 @@ pub(crate) async fn install_to_filesystem(
+     };
+     tracing::debug!("boot UUID: {boot_uuid:?}");
+ 
+-    // Find the real underlying backing device for the root.  This is currently just required
+-    // for GRUB (BIOS) and in the future zipl (I think).
+-    let device_info = {
+-        let dev = bootc_blockdev::list_dev(Utf8Path::new(&inspect.source))?;
+-        tracing::debug!("Target filesystem backing device: {}", dev.path());
+-        dev
+-    };
+-
+     let rootarg = format!("root={}", root_info.mount_spec);
+     // CLI takes precedence over config file.
+     let config_boot_mount_spec = state
+diff --git a/crates/lib/src/install/baseline.rs b/crates/lib/src/install/baseline.rs
+index 91c517d..832bd76 100644
+--- a/crates/lib/src/install/baseline.rs
++++ b/crates/lib/src/install/baseline.rs
+@@ -171,7 +171,7 @@ fn mkfs<'a>(
+             t.cmd.arg("-m");
+             t.cmd.arg(format!("uuid={u}"));
+         }
+-        Filesystem::Btrfs | Filesystem::Ext4 => {
++        Filesystem::Btrfs | Filesystem::Ext4 | Filesystem::Bcachefs => {
+             t.cmd.arg("-U");
+             t.cmd.arg(u.to_string());
+         }
+@@ -988,6 +988,9 @@ pub(crate) fn install_create_rootfs(
+     run_repart: bool,
+ ) -> Result<RootSetup> {
+     let install_config = state.install_config.as_ref();
++    let root_fs = opts.filesystem.or(install_config
++        .and_then(|c| c.filesystem_root())
++        .and_then(|r| r.fstype));
+     let luks_name = "root";
+     // Verify that the target is empty (if not already wiped in particular, but it's
+     // also good to verify that the wipe worked)
+@@ -998,6 +1001,30 @@ pub(crate) fn install_create_rootfs(
+         anyhow::bail!("Device {} is mounted", device.path())
+     }
+ 
++    let use_systemd_repart =
++        state.aboot_disk_layout.is_some() || (run_repart && can_use_systemd_repart());
++
++    // Use the install configuration to find the block setup, if we have one
++    let block_setup = if let Some(config) = install_config {
++        config.get_block_setup(opts.block_setup.as_ref().copied())?
++    } else if opts.filesystem.is_some() || use_systemd_repart {
++        // Otherwise, if a filesystem is specified then we default to whatever was
++        // specified via --block-setup, or the default
++        opts.block_setup.unwrap_or_default()
++    } else {
++        // If there was no default filesystem, then there's no default block setup,
++        // and we need to error out.
++        anyhow::bail!("No install configuration found, and no filesystem specified")
++    };
++    // A bcachefs root needs /boot on a partition of its own. Reject it
++    // otherwise, before modifying the target disk.
++    if root_fs == Some(Filesystem::Bcachefs) && !block_setup.requires_bootpart() {
++        anyhow::bail!(
++            "A bcachefs root requires a separate /boot partition with `install to-disk`; \
++             create the filesystem by hand and use `install to-filesystem`"
++        );
++    }
++
+     // Handle wiping any existing data
+     if opts.wipe {
+         let dev = &opts.device;
+@@ -1032,21 +1059,6 @@ pub(crate) fn install_create_rootfs(
+     } else {
+         Vec::new()
+     };
+-    let use_systemd_repart =
+-        state.aboot_disk_layout.is_some() || (run_repart && can_use_systemd_repart());
+-
+-    // Use the install configuration to find the block setup, if we have one
+-    let block_setup = if let Some(config) = install_config {
+-        config.get_block_setup(opts.block_setup.as_ref().copied())?
+-    } else if opts.filesystem.is_some() || use_systemd_repart {
+-        // Otherwise, if a filesystem is specified then we default to whatever was
+-        // specified via --block-setup, or the default
+-        opts.block_setup.unwrap_or_default()
+-    } else {
+-        // If there was no default filesystem, then there's no default block setup,
+-        // and we need to error out.
+-        anyhow::bail!("No install configuration found, and no filesystem specified")
+-    };
+     let serial = device.serial.as_deref().unwrap_or("<unknown>");
+     let model = device.model.as_deref().unwrap_or("<unknown>");
+     let discoverable = state.aboot_disk_layout.is_none() && use_discoverable_partitions(state);
+@@ -1155,12 +1167,8 @@ pub(crate) fn install_create_rootfs(
+             .as_ref()
+             .ok_or_else(|| anyhow::anyhow!("repart: Root filesystem type not defined"))?
+     } else {
+-        let root_filesystem = opts
+-            .filesystem
+-            .or(install_config
+-                .and_then(|c| c.filesystem_root())
+-                .and_then(|r| r.fstype))
+-            .ok_or_else(|| anyhow::anyhow!("No root filesystem specified"))?;
++        let root_filesystem =
++            root_fs.ok_or_else(|| anyhow::anyhow!("No root filesystem specified"))?;
+ 
+         &root_filesystem.to_string()
+     };
+diff --git a/crates/lib/src/install/config.rs b/crates/lib/src/install/config.rs
+index 55fdd42..6e40e40 100644
+--- a/crates/lib/src/install/config.rs
++++ b/crates/lib/src/install/config.rs
+@@ -24,6 +24,7 @@ pub(crate) enum Filesystem {
+     Xfs,
+     Ext4,
+     Btrfs,
++    Bcachefs,
+ }
+ 
+ impl std::fmt::Display for Filesystem {
+@@ -40,6 +41,7 @@ impl TryFrom<&str> for Filesystem {
+             "xfs" => Ok(Self::Xfs),
+             "ext4" => Ok(Self::Ext4),
+             "btrfs" => Ok(Self::Btrfs),
++            "bcachefs" => Ok(Self::Bcachefs),
+             other => anyhow::bail!("Unknown filesystem: {}", other),
+         }
+     }
+diff --git a/crates/lib/src/store/mod.rs b/crates/lib/src/store/mod.rs
+index 777a25e..7860897 100644
+--- a/crates/lib/src/store/mod.rs
++++ b/crates/lib/src/store/mod.rs
+@@ -504,8 +504,7 @@ const LOADER_DEVICE_PART_UUID: &str = "LoaderDevicePartUUID-4a67b082-0a4c-41cf-b
+ /// the wrong ESP in dual booted systems
+ #[context("Finding ESP used for booting")]
+ pub(crate) fn find_booted_from_esp(physical_root: &Dir) -> Result<String> {
+-    let root_dev = bootc_blockdev::list_dev_by_dir(&physical_root)?;
+-    let all_roots = root_dev.find_all_roots()?;
++    let all_roots = bootc_blockdev::list_roots_by_dir(physical_root)?;
+ 
+     let device_uuid = match read_uefi_var(LOADER_DEVICE_PART_UUID) {
+         Ok(u) => u,
+@@ -515,9 +514,11 @@ pub(crate) fn find_booted_from_esp(physical_root: &Dir) -> Result<String> {
+         Err(EfiError::MissingVar) => {
+             tracing::debug!("Missing {LOADER_DEVICE_PART_UUID}, searching through all ESPs...");
+ 
+-            let all_esps = root_dev
+-                .find_colocated_esps()?
+-                .ok_or_else(|| anyhow::anyhow!("No ESP found"))?;
++            let all_esps = all_roots
++                .iter()
++                .filter_map(|root| root.find_partition_of_esp_optional().transpose())
++                .collect::<Result<Vec<_>>>()?;
++            anyhow::ensure!(!all_esps.is_empty(), "No ESP found");
+ 
+             if all_esps.len() == 1 {
+                 // If only one ESP, there's no ambiguity
+diff --git a/docs/src/man/bootc-install-to-disk.8.md b/docs/src/man/bootc-install-to-disk.8.md
+index 0d59dc4..80602d5 100644
+--- a/docs/src/man/bootc-install-to-disk.8.md
++++ b/docs/src/man/bootc-install-to-disk.8.md
+@@ -100,6 +100,7 @@ set `discoverable-partitions = true` in their install configuration
+     - xfs
+     - ext4
+     - btrfs
++    - bcachefs
+ 
+ **--root-size**=*ROOT_SIZE*
+ 
+diff --git a/tmt/plans/integration.fmf b/tmt/plans/integration.fmf
+index b7d1e93..c105d8c 100644
+--- a/tmt/plans/integration.fmf
++++ b/tmt/plans/integration.fmf
+@@ -459,4 +459,13 @@ execute:
+     enabled: false
+     because: the derived images are built in the VM, which has no keys to sign their UKIs for Secure Boot
+   extra-skip_if_ostree: true
++
++/plan-68-install-bcachefs-multi-device:
++  summary: Test install to-filesystem on a multi-device bcachefs root
++  discover:
++    how: fmf
++    test:
++      - /tmt/tests/tests/test-68-install-bcachefs-multi-device
++  extra-skip_if_ostree: true
++  extra-fixme_skip_if_uki: true
+ # END GENERATED PLANS
+diff --git a/tmt/tests/booted/test-install-bcachefs-multi-device.nu b/tmt/tests/booted/test-install-bcachefs-multi-device.nu
+new file mode 100644
+index 0000000..4d64770
+--- /dev/null
++++ b/tmt/tests/booted/test-install-bcachefs-multi-device.nu
+@@ -0,0 +1,116 @@
++# number: 68
++# tmt:
++#   summary: Test install to-filesystem on a multi-device bcachefs root
++#   duration: 30m
++#   require:
++#     - dosfstools
++# extra:
++#   # Only covered with systemd-boot, see below, and a UKI brings its own
++#   # kernel arguments
++#   skip_if_ostree: true
++#   fixme_skip_if_uki: true
++#
++# A bcachefs filesystem on several devices is mounted with a colon-separated
++# source such as `/dev/loop0:/dev/loop1:/dev/loop2p2`. That names no single
++# block device, and findmnt reports no UUID for it. Installing to one, bootc
++# has to
++#
++# - find the ESP on whichever device's disk carries it: here the last one,
++#   the other two being whole-disk members without a partition table;
++# - take the UUID for the default `root=UUID=` argument from the devices.
++#
++# With systemd-boot, the kernels and the boot entries are on the ESP, so no
++# bootloader has to read bcachefs. GRUB loads them from /boot, which would
++# have to be a separate filesystem that it can read; that isn't covered here.
++#
++# Booting a disk installed inside the VM isn't possible here, so the test
++# stops at inspecting what was installed. bcachefs is not in the mainline
++# kernel: the test is skipped without the module or bcachefs-tools.
++
++use std assert
++use tap.nu
++
++const ESP_TYPE = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
++const DISKS = ["/var/tmp/bcachefs-a.img" "/var/tmp/bcachefs-b.img" "/var/tmp/bcachefs-c.img"]
++const ROOT = "/var/mnt/bcachefs-root"
++const ESP = "/var/mnt/bcachefs-esp"
++
++def cleanup [loops: list<string>] {
++    for mnt in [$ESP $ROOT] {
++        do { umount -l $mnt } | complete | ignore
++    }
++    for loop in $loops {
++        do { losetup -d $loop } | complete | ignore
++    }
++    rm -f ...$DISKS
++}
++
++def install_and_check [loops: list<string>] {
++    let esp_part = $"($loops.2)p1"
++    let devices = [$loops.0 $loops.1 $"($loops.2)p2"]
++
++    $"label: gpt\nsize=1G, type=($ESP_TYPE)\ntype=linux\n" | sfdisk $loops.2
++    udevadm settle
++    mkfs.vfat -F 32 $esp_part
++    bcachefs format --quiet ...$devices
++    udevadm settle
++    let uuid = (blkid --probe --match-tag UUID --output value $devices.0 | str trim)
++
++    mkdir $ROOT
++    mount -t bcachefs ($devices | str join ":") $ROOT
++    findmnt --output SOURCE,FSTYPE,UUID $ROOT
++
++    (podman run --rm --privileged --pid=host
++        --security-opt label=type:unconfined_t
++        -v /dev:/dev -v /run/udev:/run/udev:ro
++        -v /usr/share/empty:/usr/lib/bootc/bound-images.d
++        -v $"($ROOT):/target"
++        localhost/bootc
++        bootc install to-filesystem --disable-selinux /target)
++
++    assert ($"($ROOT)/composefs" | path exists) "No composefs repository in the bcachefs root"
++
++    mkdir $ESP
++    mount -o ro $esp_part $ESP
++    assert (glob $"($ESP)/EFI/systemd/*.efi" | is-not-empty) $"systemd-boot is not on ($esp_part)"
++    let entries = (glob $"($ESP)/loader/entries/*.conf")
++    assert ($entries | is-not-empty) $"No boot entries on ($esp_part)"
++    for entry in $entries {
++        let options = (open --raw $entry | lines | where { |l| $l | str starts-with "options " } | first)
++        print $"($entry): ($options)"
++        assert ($options | str contains $"root=UUID=($uuid)") $"($entry) doesn't mount the root by its UUID ($uuid)"
++    }
++}
++
++def main [] {
++    tap begin "install to-filesystem on a multi-device bcachefs root"
++
++    if (which bcachefs | is-empty) or (do { modprobe bcachefs } | complete).exit_code != 0 {
++        print "SKIP: needs bcachefs-tools and a kernel with bcachefs"
++        tap ok
++        return
++    }
++    let st = bootc status --json | from json
++    let bootloader = $st.status.booted.composefs.bootloader | str downcase
++    if $bootloader != "systemd" {
++        print $"SKIP: only covered with systemd-boot, not ($bootloader)"
++        tap ok
++        return
++    }
++
++    bootc image copy-to-storage
++
++    let loops = ($DISKS | each { |disk|
++        truncate -s 5G $disk
++        losetup --find --show --partscan $disk | str trim
++    })
++    try {
++        install_and_check $loops
++    } catch { |e|
++        cleanup $loops
++        error make {msg: $"Multi-device bcachefs install failed: ($e)"}
++    }
++    cleanup $loops
++
++    tap ok
++}
+diff --git a/tmt/tests/tests.fmf b/tmt/tests/tests.fmf
+index 21aab2e..15fccda 100644
+--- a/tmt/tests/tests.fmf
++++ b/tmt/tests/tests.fmf
+@@ -301,3 +301,10 @@ check:
+     enabled: false
+     because: the derived images are built in the VM, which has no keys to sign their UKIs for Secure Boot
+   test: nu booted/test-composefs-xbootldr.nu
++
++/test-68-install-bcachefs-multi-device:
++  summary: Test install to-filesystem on a multi-device bcachefs root
++  duration: 30m
++  require:
++  - dosfstools
++  test: nu booted/test-install-bcachefs-multi-device.nu

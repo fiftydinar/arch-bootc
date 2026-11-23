@@ -131,6 +131,17 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
 
 # Build bootc with bcachefs support from source.
 #
+# bcachefs is out of mainline and bootc does not accept it, so
+# patches/bootc/0001-bcachefs-support.patch backports upstream PR #2661 on top
+# of v1.17.5 (it cherry-picks with no conflicts). That replaces our earlier
+# three-hunk patch, which only taught `to-disk` to mkfs.bcachefs and, unlike the
+# PR, had no guard against an unbootable layout: with GRUB a bcachefs root needs
+# a separate /boot on a filesystem GRUB can read, and the old patch let
+# `--filesystem bcachefs` wipe the target and only then fail. The PR checks that
+# before --wipe, and also resolves multi-device roots and recovers the fs UUID
+# from blkid when udev is unavailable. Delete the patch once a release contains
+# the PR.
+#
 # Built with SELinux support disabled. Arch packages neither libselinux nor
 # libsepol, and this image is deliberately SELinux-free, so the default build
 # cannot link. Upstream issue #2431 made this a supported build mode in v1.17.0:
@@ -171,7 +182,10 @@ RUN pacman -Syu --noconfirm make rust go-md2man git wget && \
     BOOTC_CARGO_OPTIONS='--no-default-features --features "install-to-disk pre-6.15"' && \
     git clone --depth 1 --branch "$BOOTC_TAG" https://github.com/bootc-dev/bootc.git /tmp/bootc && \
     cd /tmp/bootc && \
-    git apply /tmp/patches/bootc/0001-add-bcachefs-filesystem-support.patch && \
+    git apply /tmp/patches/bootc/0001-bcachefs-support.patch && \
+    # Fail loudly if the backport ever stops applying: without it bootc has no
+    # bcachefs at all, and the installer would silently lose the filesystem.
+    grep -q Bcachefs crates/lib/src/install/config.rs || { echo "ERROR: bcachefs patch did not take effect"; exit 1; } && \
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
     make bin CARGO_OPTIONS="$BOOTC_CARGO_OPTIONS" && \
     make DESTDIR=/ install-all CARGO_OPTIONS="$BOOTC_CARGO_OPTIONS" SKIP_BUILD=1 && \
