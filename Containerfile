@@ -101,12 +101,36 @@ RUN pacman -Syu --noconfirm gcc make wget flex bison python patch diffutils && \
 #                           and stay disabled unless something enables them, so
 #                           they do not change how the image boots)
 # The toolchain is removed again in the same layer, so it does not ship.
+#
+# bootupd also consumes the bootc-internal-blockdev crate to resolve which disk
+# backs a filesystem, and the released crate cannot parse a multi-device
+# bcachefs mount source (findmnt reports /dev/vda:/dev/vdb). Our backport of
+# PR #2661 fixes that inside bootc's own copy of the crate, so the build points
+# bootupd at crates/blockdev of the patched bootc checkout below instead of the
+# crates.io release. That keeps one source of truth: the same patch produces
+# both the bootc binary and bootupd's device discovery. The checkout is removed
+# again at the end of this layer.
+#
+# Bootc source is prepared here rather than cloned twice: BOOTC_TAG is an ARG so
+# the bootupd and bootc steps cannot drift apart.
+ARG BOOTC_TAG=v1.17.5
+COPY patches/bootc /tmp/patches/bootc
 COPY patches/bootupd /tmp/patches/bootupd
 RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
     BOOTUPD_TAG=v0.4.0 && \
     git clone --depth 1 --branch "$BOOTUPD_TAG" https://github.com/coreos/bootupd.git /tmp/bootupd && \
+    git clone --depth 1 --branch "$BOOTC_TAG" https://github.com/bootc-dev/bootc.git /tmp/bootc-src && \
+    cd /tmp/bootc-src && \
+    git apply /tmp/patches/bootc/0001-bcachefs-support.patch && \
+    grep -q list_devs_by_source crates/blockdev/src/blockdev.rs || { echo "ERROR: bootc backport does not provide multi-device blockdev"; exit 1; } && \
     cd /tmp/bootupd && \
     git apply /tmp/patches/bootupd/0001-Modify-grub-paths-to-match-Arch-Linux.patch && \
+    # Point the lockfile at the patched local crate. A targeted update is needed
+    # because Cargo.lock pins the crates.io release, and [patch.crates-io] alone
+    # is not adopted while a locked version still satisfies the requirement.
+    printf '\n[patch.crates-io]\nbootc-internal-blockdev = { path = "/tmp/bootc-src/crates/blockdev" }\n' >> Cargo.toml && \
+    cargo update -p bootc-internal-blockdev && \
+    if grep -A2 'name = "bootc-internal-blockdev"' Cargo.lock | grep -q 'source = '; then echo "ERROR: bootc-internal-blockdev still resolves to a registry release"; exit 1; fi && \
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')" && \
     make && \
     make DESTDIR=/ install install-grub-static install-systemd-unit PACKAGESYSTEM=pacman && \
@@ -132,6 +156,9 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
     # This is the same invocation upstream's own test harness uses, see
     # tests/tests/generate-update-metadata.sh.
     bootupctl backend generate-update-metadata -vvv && \
+    # The patched blockdev must be compiled into the binary, not merely resolved
+    # in the lockfile: this error string only exists after the PR #2661 backport.
+    grep -aq 'No block device backs the filesystem' /usr/libexec/bootupd || { echo "ERROR: bootupd was built against the released blockdev, multi-device roots unsupported"; exit 1; } && \
     # bootupctl skips a component it cannot handle instead of failing, so a
     # missing metadata file is the signal that generation silently did nothing.
     test -s /usr/lib/bootupd/updates/BIOS.json || { echo "ERROR: BIOS.json not generated"; exit 1; } && \
@@ -146,7 +173,7 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
     rm -f /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
     cp /tmp/patches/bootupd/grub-static-efi.cfg /usr/lib/bootupd/grub2-static/grub-static-efi.cfg && \
     cp /tmp/patches/bootupd/10_blscfg.cfg /usr/lib/bootupd/grub2-static/configs.d/10_blscfg.cfg && \
-    cd / && rm -rf /tmp/bootupd /tmp/patches/bootupd && \
+    cd / && rm -rf /tmp/bootupd /tmp/bootc-src /tmp/patches/bootupd && \
     # pkgconf is deliberately NOT in this list: dracut depends on it at runtime,
     # so 'pacman -R ... pkgconf' aborted the whole transaction ("removing pkgconf
     # breaks dependency 'pkgconf' required by dracut") and left the toolchain in
@@ -204,9 +231,12 @@ RUN pacman -Syu --noconfirm rust make git openssl pkgconf && \
 # srcdata.selinux (whether the source image has etc/selinux/config, which this
 # image does not). The lint itself is new in 1.17.x; v1.16.10 had no
 # runtime-deps check at all, which is why this warning did not appear before.
-COPY patches/bootc /tmp/patches/bootc
+#
+# patches/bootc and BOOTC_TAG come from the bootupd step above, which already
+# applied the backport to a throwaway checkout for bootupd's blockdev; this
+# step clones its own copy to build from. The COPY is intentionally not repeated
+# here: /tmp/patches/bootc is still present from that earlier COPY.
 RUN pacman -Syu --noconfirm make rust go-md2man git wget && \
-    BOOTC_TAG=v1.17.5 && \
     BOOTC_CARGO_OPTIONS='--no-default-features --features "install-to-disk pre-6.15"' && \
     git clone --depth 1 --branch "$BOOTC_TAG" https://github.com/bootc-dev/bootc.git /tmp/bootc && \
     cd /tmp/bootc && \
